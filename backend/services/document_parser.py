@@ -65,11 +65,14 @@ class DocumentParser:
     def __init__(self):
         # 选项匹配模式：支持 A. A、A． A) A、（A） 等格式
         # Group 1: 选项字母, Group 2: 选项内容
-        self.option_pattern = re.compile(r'^[\(（]?([A-Z])[\)）]?[.、．:\s]\s*(.+)$')
+        # 选项匹配模式：支持 A. A、A． A) A、（A） 等格式
+        # 兼容选项紧跟前面的情况，以及 ABCD 连着的情况
+        # Group 1: 选项字母, Group 2: 选项内容
+        self.option_pattern = re.compile(r'(?:^|[\s\n])[\(（\[]?([A-F|a-f])[\)）\]]?[.、．:\s]\s*(.+?)(?=(?:[\s\n][\(（\[]?[A-F|a-f][\)）\]]?[.、．:\s])|$)', re.DOTALL)
         
         # 答案匹配模式：支持多种常见格式
         self.answer_pattern = re.compile(
-            r'(?:[\[【\(（]?(?:参考|正确|标准)?答案[\]】\)）]?|Answer)[:：\s]*([A-Z✓×√xTtfF]+|正确|错误|对|错)',
+            r'(?:[\[【\(（]?(?:参考|正确|标准)?答案[\]】\)）]?|Answer)[:：\s]*([A-F]+|正确|错误|对|错|√|×|T|F)',
             re.IGNORECASE
         )
         
@@ -79,15 +82,15 @@ class DocumentParser:
             re.IGNORECASE
         )
         
-        # 题目开头模式：支持各种编号格式
+        # 题目开头模式：支持各种编号格式 (05. 02、)
         self.question_start_pattern = re.compile(
-            r'^(?:[\(（]?\d+[\)）]?[.、．:\s]|第\d+题[\s:：]?|题目\d+[\s:：]?|Question\s*\d+[.:\s])',
+            r'^(?:(?:[\(（\[]?\d+[\)）\]]?|第\d+题|题目\d+|Question\s*\d+)[.、．:\s])',
             re.IGNORECASE
         )
-        
+
         # 题型标签模式
         self.type_label_pattern = re.compile(
-            r'^[一二三四五六七八九十]+[、.．\s]|^[（(]?[一二三四五六七八九十]+[)）]?$|^(?:单选题|多选题|判断题|简答题|填空题|选择题|问答题)[:：\s]*$',
+            r'^(?:[一二三四五六七八九十]+[、.．\s]|[（(]?[一二三四五六七八九十]+[)）]?$|(?:单选|多选|判断|简答|填空|选择|问答)(?:题)?[:：\s]*$)',
             re.IGNORECASE
         )
     
@@ -374,6 +377,16 @@ class DocumentParser:
                 values = [v.lower() for v in question.options.values()]
                 if any(k in ' '.join(values) for k in ['正确', '错误', '对', '错', 'true', 'false', '是', '否']):
                     return 'judge'
+            
+        # Check if content looks like a judge question (e.g. ends with ( ) and has Correct/Wrong options implied)
+        # Or if the lines immediately following content match Correct/Wrong keywords
+        if not question.options:
+            # 兼容：有些判断题没有 A/B 选项，而是直接写 "正确" "错误"
+            # 简单的 heuristic: 如果题目以 '正确' 或 '错误' 结尾，或者独立行是 '正确'/'错误'
+            # 但这里我们主要处理 parse 阶段漏掉的情况。
+            # 如果没有 options，但 answer 是 对/错，应该识别为判断题
+             if question.answer and question.answer.strip() in ['正确', '错误', '对', '错', '√', '×', 'T', 'F', 'True', 'False']:
+                 return 'judge'
             
             # Check answer to determine single or multiple
             if question.answer:
