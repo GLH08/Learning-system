@@ -68,7 +68,11 @@ class DocumentParser:
         # 选项匹配模式：支持 A. A、A． A) A、（A） 等格式
         # 兼容选项紧跟前面的情况，以及 ABCD 连着的情况
         # Group 1: 选项字母, Group 2: 选项内容
-        self.option_pattern = re.compile(r'(?:^|[\s\n])[\(（\[]?([A-F|a-f])[\)）\]]?[.、．:\s]\s*(.+?)(?=(?:[\s\n][\(（\[]?[A-F|a-f][\)）\]]?[.、．:\s])|$)', re.DOTALL)
+        # 更新策略：允许 A 后面没有分隔符，但必须是行首或空格后
+        self.option_pattern = re.compile(
+            r'^\s*[\(（\[]?([A-F])[\]\)）]?[.、．:\s]?(.*)$', 
+            re.IGNORECASE | re.DOTALL
+        )
         
         # 答案匹配模式：支持多种常见格式
         self.answer_pattern = re.compile(
@@ -127,11 +131,19 @@ class DocumentParser:
                 
                 # Check if it's an option
                 elif current_question and self.option_pattern.match(text):
-                    match = self.option_pattern.match(text)
-                    if match:
-                        option_key = match.group(1)
-                        option_value = match.group(2).strip()
-                        current_question.options[option_key] = option_value
+                    # Multi-option handling
+                    matches = list(re.finditer(r'(?:^|\s+)[\(（\[]?([A-F])[\]\)）]?[.、．:\s]?(.*?)(?=\s+[\(（\[]?[A-F][\]\)）]?[.、．:\s]|$)', text, re.IGNORECASE))
+                    if matches:
+                        for m in matches:
+                            opt_key = m.group(1).upper()
+                            opt_val = m.group(2).strip()
+                            current_question.options[opt_key] = opt_val
+                    else:
+                        match = self.option_pattern.match(text)
+                        if match:
+                            option_key = match.group(1).upper()
+                            option_value = match.group(2).strip()
+                            current_question.options[option_key] = option_value
                 
                 # Check if it's an answer
                 elif current_question and self.answer_pattern.match(text):
@@ -262,30 +274,40 @@ class DocumentParser:
                         content=content
                     )
                 
-                # Check if it's an option
-                elif current_question and self.option_pattern.match(line):
-                    match = self.option_pattern.match(line)
-                    if match:
-                        option_key = match.group(1)
-                        option_value = match.group(2).strip()
-                        current_question.options[option_key] = option_value
+                # Check if it's an option (Line-based check first)
+                elif current_question and self.option_pattern.match(text):
+                    # Multi-option handling: checks if line contains multiple options like "A. xxx B. xxx"
+                    # But first, basic match
+                    matches = list(re.finditer(r'(?:^|\s+)[\(（\[]?([A-F])[\]\)）]?[.、．:\s]?(.*?)(?=\s+[\(（\[]?[A-F][\]\)）]?[.、．:\s]|$)', text, re.IGNORECASE))
+                    if matches:
+                        for m in matches:
+                            opt_key = m.group(1).upper()
+                            opt_val = m.group(2).strip()
+                            current_question.options[opt_key] = opt_val
+                    else:
+                        # Fallback for simple match if complex regex fails
+                        match = self.option_pattern.match(text)
+                        if match:
+                            option_key = match.group(1).upper()
+                            option_value = match.group(2).strip()
+                            current_question.options[option_key] = option_value
                 
                 # Check if it's an answer
-                elif current_question and self.answer_pattern.match(line):
-                    match = self.answer_pattern.match(line)
+                elif current_question and self.answer_pattern.match(text):
+                    match = self.answer_pattern.match(text)
                     if match:
                         current_question.answer = match.group(1).strip()
                 
                 # Check if it's an explanation
-                elif current_question and self.explanation_pattern.match(line):
-                    match = self.explanation_pattern.match(line)
+                elif current_question and self.explanation_pattern.match(text):
+                    match = self.explanation_pattern.match(text)
                     if match:
                         current_question.explanation = match.group(1).strip()
                 
                 # Otherwise, append to current question content
                 elif current_question and not current_question.options:
-                    current_question.content += " " + line
-            
+                    current_question.content += " " + text
+                    
             # Save last question
             if current_question:
                 questions.append(current_question)
