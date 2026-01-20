@@ -385,8 +385,8 @@ class DocumentParser:
             # 简单的 heuristic: 如果题目以 '正确' 或 '错误' 结尾，或者独立行是 '正确'/'错误'
             # 但这里我们主要处理 parse 阶段漏掉的情况。
             # 如果没有 options，但 answer 是 对/错，应该识别为判断题
-             if question.answer and question.answer.strip() in ['正确', '错误', '对', '错', '√', '×', 'T', 'F', 'True', 'False']:
-                 return 'judge'
+            if question.answer and question.answer.strip() in ['正确', '错误', '对', '错', '√', '×', 'T', 'F', 'True', 'False']:
+                return 'judge'
             
             # Check answer to determine single or multiple
             if question.answer:
@@ -396,8 +396,9 @@ class DocumentParser:
                 else:
                     return 'single'
             
-            # Default to single choice
-            return 'single'
+            # Default to single choice if it looks like there should be options but failed parse? 
+            # No, if no options and no answer, it is essay.
+            pass
         
         # No options, likely essay
         return 'essay'
