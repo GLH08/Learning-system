@@ -106,7 +106,12 @@ export const questionsApi = {
   batchDeleteQuestions(ids: string[]) {
     return api.post<any, { data: { deleted: number } }>('/questions/batch-delete', ids)
   },
-  
+
+  // Batch update category
+  batchUpdateCategory(ids: string[], categoryId: string) {
+    return api.post<any, { data: { updated: number } }>('/questions/batch-update-category', { question_ids: ids, category_id: categoryId })
+  },
+
   // Confirm answer
   confirmAnswer(id: string) {
     return api.put<any, { data: Question }>(`/questions/${id}/confirm-answer`)

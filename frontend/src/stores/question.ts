@@ -62,11 +62,16 @@ export const useQuestionStore = defineStore('question', () => {
     const response = await questionsApi.batchDeleteQuestions(ids)
     return response.data
   }
-  
+
+  const batchUpdateCategory = async (ids: string[], categoryId: string) => {
+    const response = await questionsApi.batchUpdateCategory(ids, categoryId)
+    return response.data
+  }
+
   const exportQuestionsJSON = async (params: any) => {
     return await questionsApi.exportQuestionsJSON(params)
   }
-  
+
   return {
     questions,
     currentQuestion,
@@ -83,6 +88,7 @@ export const useQuestionStore = defineStore('question', () => {
     updateQuestion,
     deleteQuestion,
     batchDeleteQuestions,
+    batchUpdateCategory,
     exportQuestionsJSON
   }
 })

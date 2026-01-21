@@ -13,7 +13,7 @@ from models.question import Question
 from models.category import Category
 from schemas.question import (
     QuestionCreate, QuestionUpdate, QuestionResponse,
-    QuestionListQuery, QuestionStatsResponse
+    QuestionListQuery, QuestionStatsResponse, BatchUpdateCategoryRequest
 )
 from schemas.common import Response, PageResponse
 from utils.security import get_current_user
@@ -284,6 +284,32 @@ async def update_question(
     return Response(code=0, message="更新成功", data=question_to_dict(db_question))
 
 
+@router.post("/batch-update-category", response_model=Response)
+async def batch_update_category(
+    request: BatchUpdateCategoryRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Batch update questions category"""
+    if not request.question_ids:
+        raise ParameterError("请选择要更新的题目")
+
+    # Validate category
+    if request.category_id and request.category_id != "default":
+        category = db.query(Category).filter(Category.id == request.category_id).first()
+        if not category:
+            raise NotFoundError("分类不存在")
+
+    # Update questions
+    updated_count = db.query(Question).filter(Question.id.in_(request.question_ids)).update(
+        {"category_id": request.category_id or "default"},
+        synchronize_session=False
+    )
+    db.commit()
+
+    return Response(code=0, message=f"成功更新 {updated_count} 道题目的分类", data={"updated": updated_count})
+
+
 @router.post("/batch-delete", response_model=Response)
 async def batch_delete_questions(
     question_ids: list[str],
@@ -293,11 +319,11 @@ async def batch_delete_questions(
     """Batch delete questions"""
     if not question_ids:
         raise ParameterError("请选择要删除的题目")
-    
+
     # Delete questions
     deleted_count = db.query(Question).filter(Question.id.in_(question_ids)).delete(synchronize_session=False)
     db.commit()
-    
+
     return Response(code=0, message=f"成功删除 {deleted_count} 道题目", data={"deleted": deleted_count})
 
 
@@ -480,8 +506,8 @@ async def preview_import(
             if not text: return ""
             # Keep only Chinese, letters, numbers
             return re.sub(r'[^\w\u4e00-\u9fff]', '', text).lower()
-            
-        def is_similar(a, b, threshold=0.9):
+
+        def is_similar(a, b, threshold=0.95):
             """Check if two strings are similar"""
             return SequenceMatcher(None, a, b).ratio() > threshold
 
@@ -489,10 +515,10 @@ async def preview_import(
         # Note: Optimization needed for very large datasets (e.g. vector search or elasticsearch)
         # For now, fetching all contents is acceptable for typical usage (<50k questions)
         all_existing_questions = db.query(Question.id, Question.content).all()
-        
+
         # Build lookup maps
         # Exact map (normalized) -> list of IDs (to handle potential multiple identicals)
-        norm_map = {} 
+        norm_map = {}
         for qid, content in all_existing_questions:
             if not content: continue
             norm = normalize_text(content)
@@ -503,27 +529,28 @@ async def preview_import(
         # Mark duplicates
         for q in parsed_questions:
             if not q.content: continue
-            
+
             q_norm = normalize_text(q.content)
             is_dup = False
             dup_reason = ""
-            
+
             # Strategy 1: Normalized Exact Match (Fast, catches punctuation/spacing diffs)
             if q_norm in norm_map:
                 is_dup = True
                 dup_reason = "内容完全相同（忽略标点）"
-            
+
             # Strategy 2: Fuzzy Match (Slow, catches OCR typos)
-            # Only run if not already matched and string is long enough to be meaningful
-            if not is_dup and len(q_norm) > 10:
-                # We iterate to find a similar one. 
-                # Optimization: Limit comparison to same 'type' if we had that info indexed, 
+            # Only apply fuzzy matching for longer texts (>20 chars after normalization)
+            # to avoid false positives with short questions
+            if not is_dup and len(q_norm) > 20:
+                # We iterate to find a similar one.
+                # Optimization: Limit comparison to same 'type' if we had that info indexed,
                 # but currently we compare against all.
                 # To be faster, we could check length proximity first.
                 for existing_norm in norm_map.keys():
-                    if abs(len(q_norm) - len(existing_norm)) > 5: continue # Length heuristic
-                    
-                    if is_similar(q_norm, existing_norm, threshold=0.9):
+                    if abs(len(q_norm) - len(existing_norm)) > 10: continue # Length heuristic
+
+                    if is_similar(q_norm, existing_norm, threshold=0.95):
                         is_dup = True
                         dup_reason = "内容高度相似（疑似OCR误差）"
                         break
@@ -596,12 +623,12 @@ async def import_questions(
     def is_similar(a, b, threshold=0.9):
         return SequenceMatcher(None, a, b).ratio() > threshold
 
-    duplicate_contents = set()
+    # Pre-fetch all existing question contents for duplicate check
+    existing_norms = []
     if skipDuplicates:
-        # Pre-fetch all existing question contents
         all_existing_questions = db.query(Question.content).all()
         existing_norms = [normalize_text(q.content) for q in all_existing_questions if q.content]
-        
+
     # Validate category
     if categoryId:
         category = db.query(Category).filter(Category.id == categoryId).first()
@@ -609,11 +636,12 @@ async def import_questions(
             raise ParameterError("分类不存在")
     else:
         categoryId = "default"
-    
+
     created = []
     errors = []
     skipped = []
-    
+    batch_norms = []  # Track normalized content in current batch to prevent self-duplication
+
     for idx, q_data in enumerate(questions, 1):
         try:
             # Validate required fields
@@ -624,24 +652,32 @@ async def import_questions(
                     continue
                 else:
                     raise ParameterError(f"第 {idx} 题：题目内容为空")
-            
+
             # Check for duplicate
             if skipDuplicates:
                 q_norm = normalize_text(content)
                 is_dup = False
-                
-                # Check normalized Exact
+
+                # Check against existing database questions (exact match)
                 if q_norm in existing_norms:
                    is_dup = True
-                
-                # Check Fuzzy only if not exact match found yet
-                if not is_dup and len(q_norm) > 10:
+
+                # Check against existing database questions (fuzzy match)
+                # Only apply fuzzy matching for longer texts (>20 chars after normalization)
+                # to avoid false positives with short questions
+                if not is_dup and len(q_norm) > 20:
                      for existing_norm in existing_norms:
-                        if abs(len(q_norm) - len(existing_norm)) > 5: continue
-                        if is_similar(q_norm, existing_norm):
+                        # Skip if length difference is too large
+                        if abs(len(q_norm) - len(existing_norm)) > 10: continue
+                        # Use higher threshold (0.95) for more strict matching
+                        if SequenceMatcher(None, q_norm, existing_norm).ratio() > 0.95:
                             is_dup = True
                             break
-                
+
+                # Check against current batch to prevent self-duplication
+                if not is_dup and q_norm in batch_norms:
+                    is_dup = True
+
                 if is_dup:
                     skipped.append({"line": idx, "message": "题目已存在或高度相似，跳过导入"})
                     continue
@@ -649,12 +685,12 @@ async def import_questions(
             # Determine status & Clean data
             answer = q_data.get('answer')
             if answer and str(answer).strip():
-                answer_status = "confirmed" 
+                answer_status = "confirmed"
                 answer = str(answer).strip()
             else:
                 answer_status = "none"
                 answer = None
-                
+
             explanation = q_data.get('explanation')
             if explanation and str(explanation).strip():
                 explanation_status = "confirmed"
@@ -662,7 +698,7 @@ async def import_questions(
             else:
                 explanation_status = "none"
                 explanation = None
-            
+
             # Create question
             question = Question(
                 category_id=categoryId,
@@ -677,18 +713,18 @@ async def import_questions(
                 tags=to_json(q_data.get('tags', [])),
                 source=q_data.get('source')
             )
-            
+
             db.add(question)
             db.flush()
-            
+
             created.append({
                 "id": question.id,
                 "content": question.content[:50] + "..." if len(question.content) > 50 else question.content
             })
-            
-            # Add new question to local cache to prevent self-duplication in same batch
+
+            # Add to batch cache to prevent self-duplication within same batch
             if skipDuplicates:
-                existing_norms.append(normalize_text(content))
+                batch_norms.append(normalize_text(content))
         
         except Exception as e:
             if skipErrors:

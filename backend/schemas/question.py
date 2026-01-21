@@ -62,3 +62,8 @@ class QuestionStatsResponse(BaseModel):
     byDifficulty: Dict[str, int]
     byStatus: Dict[str, int]
     incomplete: int
+
+
+class BatchUpdateCategoryRequest(BaseModel):
+    question_ids: List[str] = Field(..., description="题目ID列表")
+    category_id: str = Field(..., description="目标分类ID")

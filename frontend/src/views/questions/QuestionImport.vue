@@ -86,7 +86,17 @@
               style="width: 200px"
             />
           </n-form-item>
-          
+
+          <n-form-item>
+            <n-button
+              size="small"
+              @click="applyBatchCategory"
+              :disabled="!importConfig.categoryId"
+            >
+              应用到全部
+            </n-button>
+          </n-form-item>
+
           <n-form-item label="默认难度">
             <n-select
               v-model:value="importConfig.defaultDifficulty"
@@ -94,7 +104,7 @@
               style="width: 120px"
             />
           </n-form-item>
-          
+
           <n-form-item label="跳过错误">
             <n-switch v-model:value="importConfig.skipErrors" />
           </n-form-item>
@@ -252,6 +262,23 @@ const previewColumns: DataTableColumns<any> = [
     render: (row) => typeMap[row.type] || row.type
   },
   {
+    title: '分类',
+    key: 'categoryId',
+    width: 180,
+    render: (row, index) => {
+      return h(NSelect, {
+        value: row.categoryId,
+        options: categoryOptions.value,
+        placeholder: '选择分类',
+        clearable: true,
+        size: 'small',
+        onUpdateValue: (value) => {
+          previewQuestions.value[index].categoryId = value
+        }
+      })
+    }
+  },
+  {
     title: '题目内容',
     key: 'content',
     ellipsis: true,
@@ -266,14 +293,14 @@ const previewColumns: DataTableColumns<any> = [
     title: '答案',
     key: 'hasAnswer',
     width: 80,
-    render: (row) => h(NTag, { type: row.hasAnswer ? 'success' : 'default' }, 
+    render: (row) => h(NTag, { type: row.hasAnswer ? 'success' : 'default' },
       { default: () => row.hasAnswer ? '有' : '无' })
   },
   {
     title: '解析',
     key: 'hasExplanation',
     width: 80,
-    render: (row) => h(NTag, { type: row.hasExplanation ? 'success' : 'default' }, 
+    render: (row) => h(NTag, { type: row.hasExplanation ? 'success' : 'default' },
       { default: () => row.hasExplanation ? '有' : '无' })
   },
   {
@@ -352,16 +379,21 @@ const handlePreview = async () => {
 const handleImport = async () => {
   try {
     importing.value = true
-    
-    const response = await api.post('/questions/import', previewQuestions.value, {
+
+    // 为每道题目设置分类（如果单独设置了就用单独的，否则用全局默认的）
+    const questionsToImport = previewQuestions.value.map(q => ({
+      ...q,
+      categoryId: q.categoryId || importConfig.categoryId
+    }))
+
+    const response = await api.post('/questions/import', questionsToImport, {
       params: {
-        categoryId: importConfig.categoryId,
         defaultDifficulty: importConfig.defaultDifficulty,
         skipErrors: importConfig.skipErrors,
         skipDuplicates: importConfig.skipDuplicates
       }
     })
-    
+
     importResult.value = {
       success: response.data.success,
       failed: response.data.failed,
@@ -369,7 +401,7 @@ const handleImport = async () => {
       errors: response.data.errors || [],
       skippedDetails: response.data.skippedDetails || []
     }
-    
+
     currentStep.value = 3
     stepStatus.value = 'finish'
   } catch (error) {
@@ -399,6 +431,19 @@ const handleReset = () => {
     failed: 0,
     errors: []
   }
+}
+
+const applyBatchCategory = () => {
+  if (!importConfig.categoryId) {
+    message.warning('请先选择分类')
+    return
+  }
+
+  previewQuestions.value.forEach(q => {
+    q.categoryId = importConfig.categoryId
+  })
+
+  message.success('已应用分类到全部题目')
 }
 
 onMounted(() => {

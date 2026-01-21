@@ -56,6 +56,14 @@
               v-if="selectedIds.length > 0"
               type="primary"
               secondary
+              @click="showBatchCategoryModal = true"
+            >
+              批量分类 ({{ selectedIds.length }})
+            </n-button>
+            <n-button
+              v-if="selectedIds.length > 0"
+              type="primary"
+              secondary
               @click="handleBatchAI"
             >
               批量 AI 补全 ({{ selectedIds.length }})
@@ -89,10 +97,33 @@
           :row-key="(row: Question) => row.id"
           v-model:checked-row-keys="selectedIds"
           @update:page="handlePageChange"
+          @update:page-size="handlePageSizeChange"
+          remote
         />
       </n-card>
     </n-space>
-    
+
+    <!-- Batch Category Modal -->
+    <n-modal
+      v-model:show="showBatchCategoryModal"
+      preset="dialog"
+      title="批量设置分类"
+      positive-text="确定"
+      negative-text="取消"
+      :loading="batchCategorying"
+      @positive-click="handleBatchCategory"
+    >
+      <n-space vertical>
+        <div>已选择 {{ selectedIds.length }} 道题目</div>
+        <n-select
+          v-model:value="batchCategoryId"
+          :options="categoryOptions"
+          placeholder="选择目标分类"
+          clearable
+        />
+      </n-space>
+    </n-modal>
+
     <!-- Batch Delete Modal -->
     <n-modal
       v-model:show="showBatchDeleteModal"
@@ -139,6 +170,9 @@ const filters = reactive({
 const selectedIds = ref<string[]>([])
 const showBatchDeleteModal = ref(false)
 const batchDeleting = ref(false)
+const showBatchCategoryModal = ref(false)
+const batchCategorying = ref(false)
+const batchCategoryId = ref<string | null>(null)
 
 const categoryOptions = computed(() => {
   return categories.value.map(c => ({
@@ -270,7 +304,8 @@ const pagination = computed(() => ({
   pageSize: questionStore.pageSize,
   itemCount: questionStore.total,
   showSizePicker: true,
-  pageSizes: [10, 20, 50, 100]
+  pageSizes: [10, 20, 50, 100],
+  prefix: ({ itemCount }: { itemCount: number }) => `共 ${itemCount} 条`
 }))
 
 const handleSearch = () => {
@@ -289,6 +324,14 @@ const handlePageChange = (page: number) => {
   })
 }
 
+const handlePageSizeChange = (pageSize: number) => {
+  questionStore.fetchQuestions({
+    page: 1,
+    pageSize,
+    ...filters
+  })
+}
+
 const handleDelete = async (id: string) => {
   try {
     await questionStore.deleteQuestion(id)
@@ -301,18 +344,40 @@ const handleDelete = async (id: string) => {
 
 const handleBatchAI = () => {
   if (selectedIds.value.length === 0) return
-  
+
   // Find full question objects for selected IDs
   // Since we only select from current page, this is safe
   const selectedQuestions = questionStore.questions.filter(q => selectedIds.value.includes(q.id))
-  
+
   if (selectedQuestions.length === 0) {
      message.warning('未能找到选中的题目信息')
      return
   }
-  
+
   aiQueueStore.addToQueue(selectedQuestions)
   selectedIds.value = [] // Clear selection
+}
+
+const handleBatchCategory = async () => {
+  if (!batchCategoryId.value) {
+    message.warning('请选择目标分类')
+    return false
+  }
+
+  try {
+    batchCategorying.value = true
+    await questionStore.batchUpdateCategory(selectedIds.value, batchCategoryId.value)
+    message.success(`成功更新 ${selectedIds.value.length} 道题目的分类`)
+    showBatchCategoryModal.value = false
+    batchCategoryId.value = null
+    selectedIds.value = []
+    handleSearch()
+  } catch (error) {
+    message.error('批量更新分类失败')
+    return false
+  } finally {
+    batchCategorying.value = false
+  }
 }
 
 const handleBatchDelete = async () => {
